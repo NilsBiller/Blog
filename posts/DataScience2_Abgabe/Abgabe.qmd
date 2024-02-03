@@ -1,0 +1,21 @@
+---
+title: "Hate Speech Klassifikation"
+author: "Nils Biller"
+date: "2024-02-09"
+categories: [Textanalyse, Tidymodels, Klassifikation, Transformers, Neuronale Netze]
+image: HateTastatur.jpeg
+---
+
+
+# Hallo ich bin ein Blog
+
+Ich werde gebraucht für Data Science 2
+
+
+
+
+
+
+
+
+

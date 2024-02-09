@@ -8,7 +8,9 @@ image: HateTastatur.jpeg
 
 # Hate Speech Klassifikation
 
-Die Klassifikation von Hassrede in Twitternachrichten ist entscheidend, um die Auswirkungen von negativem Verhalten in sozialen Medien zu verstehen und einzudämmen. Durch die Entwicklung von Algorithmen und Modellen, die automatisch Hassrede erkennen, können wir potenziell schädliche Inhalte identifizieren und bekämpfen. Dieser Post bietet einen Überblick über Ansätze und Techniken zur Hassredeerkennung.
+Die Klassifikation von Hassrede in Textnachrichten ist entscheidend, um die Auswirkungen von negativem Verhalten in sozialen Medien zu verstehen und einzudämmen. Durch die Entwicklung von Algorithmen und Modellen, die automatisch Hassrede erkennen, können wir potenziell schädliche Inhalte identifizieren und bekämpfen. Dieser Post bietet einen Überblick über einige Ansätze und Techniken zur Erkennung von Hassrede.
+
+Zur Demonstration der Modelle wird ein Datensatz mit Twitternachrichten verwendet.
 
 ## 1 Vorbereitung der Daten
 
@@ -19,6 +21,7 @@ library(tidytext)
 library(tidymodels)
 library(wordcloud)
 library(tictoc)
+library(tm) #für Corpus
 library(caret) #für Konfusionsmatrix
 library(textrecipes) #für u.a. step_textfeature
 library(syuzhet) #Stimmungsanalyse
@@ -43,33 +46,23 @@ d_hate <- read_csv(pfad)
 
 ```{r Bereinigen und Splitten}
 ## Tweets bereinigen
-
 clean.text = function(x)
 {
-  # alles in Kleinbuchstaben umwandeln
-  x = tolower(x)
-  # rt entfernen
-  x = gsub("rt", "", x)
-  # alle @ + Namen entfernen
-  x = gsub("@\\w+", "", x)
-  # Satzzeichen entfernen
-  x = gsub("[[:punct:]]", "", x)
-  # Zahlen entfernen
-  x = gsub("[[:digit:]]", "", x)
-  # Links entfernen
-  x = gsub("http\\w+", "", x)
-  # hhtp entfernen wenn es alleine steht
-  x = gsub("http", "", x)
-  # doppelte Leerzeichen und Tabs entfernen
-  x = gsub("[ |\t]{2,}", " ", x)
-  # Leerzeichen am Anfang entfernen
-  x = gsub("^ ", "", x)
-  # Leerzeichen am Ende entfernen
-  x = gsub(" $", "", x)
+  x = tolower(x)                 # alles in Kleinbuchstaben umwandeln
+  x = gsub("rt", "", x)          # rt entfernen
+  x = gsub("@\\w+", "", x)       # alle @ + Namen entfernen
+  x = gsub("[[:punct:]]", "", x) # Satzzeichen entfernen
+  x = gsub("[[:digit:]]", "", x) # Zahlen entfernen
+  x = gsub("http\\w+", "", x)    # Links entfernen
+  x = gsub("http", "", x)        # hhtp entfernen wenn es alleine steht
+  x = gsub("[ |\t]{2,}", " ", x) # doppelte Leerzeichen und Tabs entfernen
+  x = gsub("^ ", "", x)          # Leerzeichen am Anfang entfernen
+  x = gsub(" $", "", x)          # Leerzeichen am Ende entfernen
 
   return(x)
 }
 
+#Funktion anwenden
 df_hate <- d_hate %>% 
   mutate(tweet_clean = tweet) %>% 
   mutate(tweet_clean = clean.text(tweet_clean))
@@ -84,14 +77,15 @@ test_hate <- testing(train_test_split)
 
 ### 1.2 Stoppwörter entfernen
 
-```{r}
+Nachdem die Tweets nun bereinigt sind, können die Stoppwörter entfernt werden, da sie in der Regel keine besondere Rolle bei der Interpretation eines Satzes spielen.
 
+```{r message=FALSE, warning=FALSE}
+# unnest
 df_hate <- df_hate %>%
   mutate(words = tweet_clean) %>% 
   unnest_tokens(words, words)
 
 ## die 15 häufigsten Wörter
-
 df_hate %>%
   count(words, sort = TRUE) %>%
   top_n(15) %>%
@@ -107,21 +101,19 @@ df_hate %>%
 
 ```
 
-Diese Graphik ist eine schöne Demonstration, warum Stoppwörter entfernt werden sollten. Wörter wie "the", "a" oder "and" liefern keine Hinweise auf die Stimmung im Tweet.
+Die neun häufigsten Wörter sind Stoppwörter. Dies demonstriert, dass es sinnvoll ist diese zu entfernen.
 
 ```{r Stoppwörter entfernen}
-data("stop_words")
-
 # Stoppwortentfernung
+data("stop_words")
 
 df_hate <- df_hate %>%
   anti_join(stop_words, by = c("words" = "word"))
 
 ```
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 ## die 15 häufigsten Wörter
-
 df_hate %>%
   count(words, sort = TRUE) %>%
   top_n(15) %>%
@@ -136,18 +128,19 @@ df_hate %>%
   theme_minimal()
 ```
 
+Das Entfernen der Stoppwörter war erfolgreich. Das nun mit Abstand häufigste Wort ist "trash".
+
 ## 2 Visualisierung der Tweets
 
-Um sich die Tweets genauer vor Augen zu führen, werden diese im folgenden graphisch dargestellt.
+Um einen Überblick über die Tweets zu erhalten, werden diese im Folgenden grafisch analysiert.
 
 ### 2.1 Stimmungsanalyse
 
 ```{r}
 
-# Converting tweets to ASCII to trackle strange characters
+# Converting tweets to ASCII, um Verarbeitung zu garantieren
 tweets <- df_hate %>% 
   select(tweet_clean)
-
 tweets <- iconv(tweets, from="UTF-8", to="ASCII", sub="")
 
 #Sentiments erkennen
@@ -173,11 +166,11 @@ ggplot(data=sentimentscores,aes(x=sentiment,y=Score))+
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+Diese Graphik bietet einen schönen Überblick über die Stimmung in den Tweets. Positive und Negative Tweets sind relativ ausgeglichen. Jede Stimmung ist ähnlich oft vorhanden.
+
 ### 2.2 Wordcloud
 
 ```{r}
-library(tm)
-
 # Worttoken umwandeln
 tweets <- Corpus(VectorSource(df_hate$words))
 
@@ -186,6 +179,10 @@ wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
           colors=brewer.pal(8, "Dark2"), random.color = T, random.order = F,
           rot.per=0.25)
 ```
+
+Hier sieht man die häufigsten Wörter aus den Tweets.
+
+Unterscheidet man zwischen Tweets die als Hate Speech kassifiziert sind und denen die kein Hate Speech sind, bekommt man folgende Wordclouds.
 
 ::: panel-tabset
 ## Hate Speech
@@ -209,7 +206,7 @@ wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
           rot.per=0.25)
 ```
 
-## Non Hate Speech
+## No Hate Speech
 
 ```{r }
 #| code-fold: true
@@ -231,6 +228,10 @@ wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
 ```
 :::
 
+Auffällig ist, dass bei No Hate Speech auch das Wort "hoe" vorkommt (zu sehen rechts unten Mitte).
+
+Erklärt werden kann dies mit folgendem Tweet.
+
 ```{r}
 #| code-fold: true
 #| code-summary: "Show the Code"
@@ -242,15 +243,19 @@ tweets <- df_hate %>%
 tweets[5, "tweet_clean"]
 ```
 
+Homonyme wie dieses, könnten zu Fehlern in der Vorhersage führen.
+
 ### 2.3 Wortbeziehungen (Bigram)
 
 Die am häufigsten vorkommenden Wortpaare sind in folgender interaktiven Graphik zu sehen.
 
 *Navigation:* rechte Maustaste: bewegen; Mausrad: zoomen
 
-```{r}
-## Bigram interaktiv
+```{r message=FALSE, warning=FALSE}
+#| code-fold: true
+#| code-summary: "Show the Code"
 
+## Bigram interaktiv
 #bigram Tabelle
 bigram <- df_hate %>% 
   unnest_tokens(
@@ -272,11 +277,8 @@ bigram_count <- bigram %>%
   count(word1, word2, sort = TRUE) %>% 
   rename(weight = n)
 
-bigram_count %>% head()
 
-
-#bigram erstellen
-
+# bigram erstellen
 library(networkD3)
 library(igraph)
 library(magrittr)
@@ -321,6 +323,8 @@ forceNetwork(
 
 ## 3 Huggingface Modell
 
+Um Hate Speech in Textnachrichten zu klassifizieren, können vortrainierte Modelle wie das "roberta" Modell von Hugging Face verwendet werden. Dieses Modell wurde auf Grundlage von 40.000 Textnachrichten entwickelt.
+
 ```{r}
 library(reticulate)
 use_virtualenv("~/Studium/blognilsbiller/VirtualEnv")
@@ -335,8 +339,6 @@ import tensorflow
 classifier = pipeline("text-classification", model="facebook/roberta-hate-speech-dynabench-r4-target")
 ```
 
-hier kopiert
-
 ```{r}
 tweets <- test_hate$tweet_clean
 ```
@@ -348,27 +350,38 @@ results = classifier(tweets)
 
 ```{r}
 result <- py$results
+
+# Extrahieren der Labels
 labels <- lapply(result, function(element) element$label)
-tweets_hate <- cbind(test_hate, pred = unlist(labels))
-tweets_hate <- tweets_hate %>% 
-  mutate(class = as.factor(class),
-         pred = case_when(pred == "hate" ~ "hate speech",
-            pred == "nothate" ~ "other"),
-         pred = as.factor(pred))
+
+# Zusammenführen der Ergebnisse mit dem ursprünglichen Datensatz
+tweets_zsm <- bind_cols(test_hate, pred = unlist(labels))
+
+# Umwandeln in Faktoren und Umbenennen der Vorhersagen
+tweets_zsm <- tweets_zsm %>%
+  mutate(pred = factor(case_when(pred == "hate" ~ "hate speech",
+                                 pred == "nothate" ~ "other")))
+
 ```
 
 ```{r}
-my_metrics2 <- metric_set(accuracy, f_meas)
-my_metrics2(tweets_hate,
-           truth = class,
+#Vorhersage
+my_metrics <- metric_set(accuracy, f_meas)
+my_metrics(tweets_zsm,
+           truth = as.factor(class), #estimate ist factor, also class anpassen
            estimate = pred)
+
 ```
+
+Die Metrics dieses vortrainierten Modells sind ziemlich gut. Diese Werte können als Vergleichsmaßstab für die selbst entwickelten Modelle dienen.
 
 ## 4 Rekurrentes Neuronales Netzwerk
 
-### 4.1 LSTM (Long Short-Term Memory) Modell erstellen
+Das LSTM (Long Short-Term Memory) Modell ist eine spezielle Form von Rekurrenten Neuronalen Netzwerken (RNNs), die besonders gut für die Verarbeitung von Sequenzdaten wie Texten geeignet ist.
 
-```{r warning=FALSE}
+### 4.1 LSTM Modell erstellen
+
+```{r warning=FALSE, message=FALSE}
 library(keras)
 
 # Datensatz bereinigt, ohne bereits Tokenisiert
@@ -380,17 +393,14 @@ tokens <- text_tokenizer(num_words = num_words_train,
                             lower = TRUE) %>% 
   fit_text_tokenizer(data_all$tweet_clean)
 
-
 #train splitten für Kreuzvalidierung
 set.seed(142)
 train_split <- initial_split(train_hate, strata = class, prop = 0.8)
 data_train <- training(train_split)
 data_val <- testing(train_split)
 
-
 #maximale Länge eines Tweets
 maxlen <- max(str_count(train_hate$tweet_clean, "\\w+")) + 1
-
 
 # prepare data for predictors x
 data_train_x <- texts_to_sequences(tokens, data_train$tweet_clean) %>%
@@ -400,7 +410,7 @@ data_val_x <- texts_to_sequences(tokens, data_val$tweet_clean) %>%
 data_test_x <- texts_to_sequences(tokens, test_hate$tweet_clean) %>%
   pad_sequences(maxlen = maxlen)
 
-# Konvertieren der Klassenlabels in numerische Form
+# Konvertieren in numerische Form
 data_train <- data_train %>% 
   mutate(class = as.numeric(factor(class)))
 
@@ -413,7 +423,6 @@ data_val_y <- to_categorical(data_val$class - 1, num_classes = 2)
 
 #für Reproduzierbarkeit Zufallszahlengenerierung in R zu konfigurieren
 RNGkind(sample.kind = "Rounding")
-
 initializer <- initializer_random_normal(seed = 100)
 
 ## Model erstellen
@@ -477,7 +486,7 @@ summary(model_keras)
 
 ### 4.2 Model trainieren
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 epochs <- 10 #Durchläufe
 batch_size <- 1024
 
@@ -523,6 +532,7 @@ conf.matrix <-  confusionMatrix(
 
 #Anzeigen
 conf.matrix$byClass %>% round(digits = 3) * 100
+
 ```
 
 ## Validation-Datensatz
@@ -550,7 +560,7 @@ conf.matrix$byClass %>% round(digits = 3) * 100
 
 ## test-Datensatz
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 #| code-fold: true
 #| code-summary: "Show the Code"
 
@@ -569,8 +579,11 @@ conf.matrix <-  confusionMatrix(
 
 #Anzeigen
 conf.matrix$byClass %>% round(digits = 3) * 100
+
 ```
 :::
+
+Die Hate Speech Kalassifikation fällt schlechter aus als beim Hugging Face Modell. Dennoch kann man zufrieden sein.
 
 ## 5 Modell mit Tidymodels
 
@@ -581,7 +594,7 @@ mod_rand <- rand_forest(mode = "classification")
 mod_neighbor <- nearest_neighbor(mode = "classification")
 mod_xgb <- boost_tree(mode = "classification")
 
-#Mit Tuning
+## Mit Tuning
 mod_randT <-
   rand_forest(mtry = tune(),
               min_n = tune(),
@@ -620,12 +633,12 @@ rec <- recipe(class ~ ., data = train_mod) %>%
                                     method = "custom",
                                     lexicon = Insults)) %>% 
   step_textfeature(tweet_clean, keep_original_cols = TRUE) %>% 
-  step_nzv(all_predictors()) %>% #da textfeature viele sinnlose Spalten erzeugt
+  step_nzv(all_predictors()) %>% #textfeature erzeugt viele sinnlose Spalten
   step_tokenize(tweet_clean) %>%
   step_stopwords(tweet_clean, keep = FALSE) %>%
   step_tokenfilter(tweet_clean, max_tokens = 1e3) %>% 
   step_tfidf(tweet_clean, keep_original_cols = TRUE) %>% 
-  step_nzv(all_predictors()) %>%  #zweimal, um sofort Spalten zu entfernen
+  step_nzv(all_predictors()) %>%  #(zweimal, um sofort Spalten zu entfernen)
   step_normalize(all_numeric_predictors())
 
 
@@ -639,7 +652,7 @@ set.seed(42)
 kv <- vfold_cv(train_mod, strata = class)
 ```
 
-Mit diesem Rezept kommt man zu folgenden Ergebnissen.
+Die Leistung der trainierten Modelle fällt wie folgt aus.
 
 ### 5.1 Ohne Tuning
 
@@ -680,7 +693,7 @@ my_metrics(Vorgersage,
 
 ## Nearest Neighbor
 
-```{r }
+```{r message=FALSE, warning=FALSE}
 #| code-fold: true
 #| code-summary: "Show the Code"
 
@@ -747,16 +760,16 @@ my_metrics(Vorgersage,
 ```
 :::
 
-Ohne Tuning erhält man bereits einen guten Accuracy-Wert. Und ein Rechenzeit von unter 10 Sekunden ist natürlich sehr angenehm.
+Ohne Tuning erhält man bereits gute Accuracy-Werte, welche gut mit dem LSTM Modell mithalten können. Die Rechenzeit von unter 10 Sekunden ist ebenfalls sehr angenehm.
 
-Mal sehen, ob sich das Modell durch tuning verbessert.
+Mal sehen, ob sich die Modelle durch Tuning verbessern.
 
 ### 5.2 Mit Tuning
 
 ::: panel-tabset
 ## Random Forest
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 #| code-fold: true
 #| code-summary: "Show the Code"
 
@@ -781,7 +794,7 @@ rf_aufTest %>% collect_metrics()
 
 ## Nearest Neighbor
 
-```{r }
+```{r message=FALSE, warning=FALSE}
 #| code-fold: true
 #| code-summary: "Show the Code"
 
@@ -805,7 +818,7 @@ knn_aufTest %>% collect_metrics()
 
 ## XGBoost
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 #| code-fold: true
 #| code-summary: "Show the Code"
 
@@ -828,8 +841,12 @@ xgb_aufTest %>% collect_metrics()
 ```
 :::
 
-Wenn man die Accuracy zwischen den getuneten und den nicht getuneten Modellen vergleicht sind diese kaum besser oder gleich gut. Folglich kann man sich den erhöhten Zeitaufwand, der durch das Tuning entsteht, sparen.
+Wenn man die Accuracy zwischen den optimierten und den nicht optimierten Modellen vergleicht, sind diese kaum besser oder gleich gut. Folglich kann man sich in diesem Fall den erhöhten Zeitaufwand, der durch das Tuning entsteht, sparen.
 
 ## 6 Fazit
 
-Es konnte gezeigt werden, dass man Hate Speech gut durch Machine LEarning Alghorithmen
+Die Klassifikation von Hate Speech in Textnachrichten stellt eine komplexe und anspruchsvolle Aufgabe dar. Durch den Einsatz von maschinellen Lernmodellen und Textanalysemethoden konnten jedoch vielversprechende Ergebnisse erzielt werden.
+
+Insgesamt kann festgestellt werden, dass das Hugging Face Modell am besten abschnitt. Dennoch konnten die selbst trainierten Modelle gut mithalten. Die nicht optimierten Tidymodels Modelle sind mit einer Rechenzeit von ca. 10 Sekunden extrem schnell. Wenn man schnelle Ergebnisse möchte, sind diese auf jeden Fall zu Empfehlen.
+
+Der Post zeigt, dass der Einsatz von Machine-Learning-Techniken die Bekämpfung von Hassrede in den sozialen Medien unterstützen kann. Es bleibt jedoch eine Herausforderung, diese Technologie verantwortungsvoll einzusetzen und sicherzustellen, dass die Meinungsfreiheit respektiert wird und keine unbeabsichtigten Nebenwirkungen entstehen.

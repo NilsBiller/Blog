@@ -6,16 +6,830 @@ categories: [Textanalyse, Tidymodels, Klassifikation, Transformers, Neuronale Ne
 image: HateTastatur.jpeg
 ---
 
+# Hate Speech Klassifikation
 
-# Hallo ich bin ein Blog
+Die Klassifikation von Hassrede in Twitternachrichten ist entscheidend, um die Auswirkungen von negativem Verhalten in sozialen Medien zu verstehen und einzudämmen. Durch die Entwicklung von Algorithmen und Modellen, die automatisch Hassrede erkennen, können wir potenziell schädliche Inhalte identifizieren und bekämpfen. Dieser Post bietet einen Überblick über Ansätze und Techniken zur Hassredeerkennung.
 
-Ich werde gebraucht für Data Science 2
+## 1 Vorbereitung der Daten
+
+```{r library, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(tidytext)
+library(tidymodels)
+library(wordcloud)
+library(tictoc)
+library(caret) #für Konfusionsmatrix
+library(textrecipes) #für u.a. step_textfeature
+library(syuzhet) #Stimmungsanalyse
+library(readxl) #für Exeldateien
+library(xgboost)
+
+```
+
+```{r}
+#| echo: false
+
+pfad <- "C:/Users/Nils.DESKTOP-6O9O5PQ/Documents/Studium/blognilsbiller/posts/DataScience2_Abgabe/d_hate.csv"
+
+insult_pfad <- "C:/Users/Nils.DESKTOP-6O9O5PQ/Documents/Studium/AWM 5/DataScience2/Insults_English.xlsx"
+```
+
+```{r message=FALSE}
+d_hate <- read_csv(pfad)
+```
+
+### 1.1 Datensatz bereinigen
+
+```{r Bereinigen und Splitten}
+## Tweets bereinigen
+
+clean.text = function(x)
+{
+  # alles in Kleinbuchstaben umwandeln
+  x = tolower(x)
+  # rt entfernen
+  x = gsub("rt", "", x)
+  # alle @ + Namen entfernen
+  x = gsub("@\\w+", "", x)
+  # Satzzeichen entfernen
+  x = gsub("[[:punct:]]", "", x)
+  # Zahlen entfernen
+  x = gsub("[[:digit:]]", "", x)
+  # Links entfernen
+  x = gsub("http\\w+", "", x)
+  # hhtp entfernen wenn es alleine steht
+  x = gsub("http", "", x)
+  # doppelte Leerzeichen und Tabs entfernen
+  x = gsub("[ |\t]{2,}", " ", x)
+  # Leerzeichen am Anfang entfernen
+  x = gsub("^ ", "", x)
+  # Leerzeichen am Ende entfernen
+  x = gsub(" $", "", x)
+
+  return(x)
+}
+
+df_hate <- d_hate %>% 
+  mutate(tweet_clean = tweet) %>% 
+  mutate(tweet_clean = clean.text(tweet_clean))
+
+#Splitten
+set.seed(142)
+train_test_split <- initial_split(df_hate, strata = class)
+train_hate <- training(train_test_split)
+test_hate <- testing(train_test_split)
+
+```
+
+### 1.2 Stoppwörter entfernen
+
+```{r}
+
+df_hate <- df_hate %>%
+  mutate(words = tweet_clean) %>% 
+  unnest_tokens(words, words)
+
+## die 15 häufigsten Wörter
+
+df_hate %>%
+  count(words, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(words = reorder(words, n)) %>%
+  ggplot(aes(x = words, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+      labs(x = "Wort",
+      y = "Anzahl",
+      title = "Die 15 häufigsten Wörter") +
+  theme_minimal()
+
+```
+
+Diese Graphik ist eine schöne Demonstration, warum Stoppwörter entfernt werden sollten. Wörter wie "the", "a" oder "and" liefern keine Hinweise auf die Stimmung im Tweet.
+
+```{r Stoppwörter entfernen}
+data("stop_words")
+
+# Stoppwortentfernung
+
+df_hate <- df_hate %>%
+  anti_join(stop_words, by = c("words" = "word"))
+
+```
+
+```{r}
+## die 15 häufigsten Wörter
+
+df_hate %>%
+  count(words, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(words = reorder(words, n)) %>%
+  ggplot(aes(x = words, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+      labs(x = "Wort",
+      y = "Anzahl",
+      title = "Die 15 häufigsten Wörter") +
+  theme_minimal()
+```
+
+## 2 Visualisierung der Tweets
+
+Um sich die Tweets genauer vor Augen zu führen, werden diese im folgenden graphisch dargestellt.
+
+### 2.1 Stimmungsanalyse
+
+```{r}
+
+# Converting tweets to ASCII to trackle strange characters
+tweets <- df_hate %>% 
+  select(tweet_clean)
+
+tweets <- iconv(tweets, from="UTF-8", to="ASCII", sub="")
+
+#Sentiments erkennen
+sentiments <- get_nrc_sentiment((tweets))
+
+#Score erstellen
+sentimentscores<-data.frame(colSums(sentiments[,]))
+
+#Spalte umbenennen
+names(sentimentscores) <- "Score"
+
+#neue Spalte "sentiment"
+sentimentscores <- cbind("sentiment"=rownames(sentimentscores),sentimentscores)
+rownames(sentimentscores) <- NULL
+
+#plotten
+ggplot(data=sentimentscores,aes(x=sentiment,y=Score))+
+  geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("Scores")+
+  ggtitle("Stimmung in den Tweets")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### 2.2 Wordcloud
+
+```{r}
+library(tm)
+
+# Worttoken umwandeln
+tweets <- Corpus(VectorSource(df_hate$words))
+
+set.seed(42)
+wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
+          colors=brewer.pal(8, "Dark2"), random.color = T, random.order = F,
+          rot.per=0.25)
+```
+
+::: panel-tabset
+## Hate Speech
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+## Wortwolke Hate Speech
+
+# Worttoken umwandeln
+tweets <- df_hate %>% 
+  filter(class == "hate speech")
+
+tweets <- Corpus(VectorSource(tweets$words))
+
+#Cloud erstellen
+set.seed(42)
+wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
+          colors=brewer.pal(8, "Dark2"), random.color = T, random.order = F,
+          rot.per=0.25)
+```
+
+## Non Hate Speech
+
+```{r }
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+## Wortwolke Non Hate Speech
+
+# Worttoken umwandeln
+tweets <- df_hate %>% 
+  filter(class != "hate speech")
+
+tweets <- Corpus(VectorSource(tweets$words))
+
+#Cloud erstellen
+set.seed(42)
+wordcloud(tweets, min.freq = 1, max.words = 100, scale = c(2.2,1),
+          colors=brewer.pal(8, "Dark2"), random.color = T, random.order = F,
+          rot.per=0.25)
+```
+:::
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+tweets <- df_hate %>% 
+  filter(class != "hate speech") %>% 
+  filter(words == "hoe")
+
+tweets[5, "tweet_clean"]
+```
+
+### 2.3 Wortbeziehungen (Bigram)
+
+Die am häufigsten vorkommenden Wortpaare sind in folgender interaktiven Graphik zu sehen.
+
+*Navigation:* rechte Maustaste: bewegen; Mausrad: zoomen
+
+```{r}
+## Bigram interaktiv
+
+#bigram Tabelle
+bigram <- df_hate %>% 
+  unnest_tokens(
+    input = tweet_clean, 
+    output = bigram, 
+    token = 'ngrams', 
+    n = 2
+  ) %>% 
+  filter(! is.na(bigram))
+
+bigram %<>% 
+  separate(col = bigram, into = c('word1', 'word2'), sep = ' ') %>% 
+  filter(! word1 %in% stop_words$word) %>% 
+  filter(! word2 %in% stop_words$word) %>% 
+  filter(! is.na(word1)) %>% 
+  filter(! is.na(word2)) 
+
+bigram_count <- bigram %>% 
+  count(word1, word2, sort = TRUE) %>% 
+  rename(weight = n)
+
+bigram_count %>% head()
 
 
+#bigram erstellen
+
+library(networkD3)
+library(igraph)
+library(magrittr)
+
+threshold <- 50
+
+network <-  bigram_count %>%
+  filter(weight > threshold) %>%
+  graph_from_data_frame(directed = FALSE)
+
+# Anzahl der Kanten
+V(network)$degree <- strength(graph = network)
+# Gewichtung
+E(network)$width <- E(network)$weight/max(E(network)$weight)
+
+# Create networkD3 object.
+network.D3 <- igraph_to_networkD3(g = network)
+# Define node size.
+network.D3$nodes %<>% mutate(Degree = (1E-2)*V(network)$degree)
+# Define color group
+network.D3$nodes %<>% mutate(Group = 1)
+# Define edges width. 
+network.D3$links$Width <- 10*E(network)$width
+
+forceNetwork(
+  Links = network.D3$links, 
+  Nodes = network.D3$nodes, 
+  Source = 'source', 
+  Target = 'target',
+  NodeID = 'name',
+  Group = 'Group', 
+  opacity = 0.9,
+  Value = 'Width',
+  Nodesize = 'Degree', 
+  # We input a JavaScript function.
+  linkWidth = JS("function(d) { return Math.sqrt(d.value); }"), 
+  fontSize = 12,
+  zoom = TRUE, 
+  opacityNoHover = 1
+)
+```
+
+## 3 Huggingface Modell
+
+```{r}
+library(reticulate)
+use_virtualenv("~/Studium/blognilsbiller/VirtualEnv")
+```
+
+```{python, message=FALSE, warning=FALSE}
+from transformers import pipeline
+import tensorflow
+```
+
+```{python}
+classifier = pipeline("text-classification", model="facebook/roberta-hate-speech-dynabench-r4-target")
+```
+
+hier kopiert
+
+```{r}
+tweets <- test_hate$tweet_clean
+```
+
+```{python}
+tweets = r.tweets
+results = classifier(tweets)
+```
+
+```{r}
+result <- py$results
+labels <- lapply(result, function(element) element$label)
+tweets_hate <- cbind(test_hate, pred = unlist(labels))
+tweets_hate <- tweets_hate %>% 
+  mutate(class = as.factor(class),
+         pred = case_when(pred == "hate" ~ "hate speech",
+            pred == "nothate" ~ "other"),
+         pred = as.factor(pred))
+```
+
+```{r}
+my_metrics2 <- metric_set(accuracy, f_meas)
+my_metrics2(tweets_hate,
+           truth = class,
+           estimate = pred)
+```
+
+## 4 Rekurrentes Neuronales Netzwerk
+
+### 4.1 LSTM (Long Short-Term Memory) Modell erstellen
+
+```{r warning=FALSE}
+library(keras)
+
+# Datensatz bereinigt, ohne bereits Tokenisiert
+data_all <- rbind(train_hate, test_hate)
+
+# Tokenisieren
+num_words_train <- 1024
+tokens <- text_tokenizer(num_words = num_words_train,
+                            lower = TRUE) %>% 
+  fit_text_tokenizer(data_all$tweet_clean)
 
 
+#train splitten für Kreuzvalidierung
+set.seed(142)
+train_split <- initial_split(train_hate, strata = class, prop = 0.8)
+data_train <- training(train_split)
+data_val <- testing(train_split)
 
 
+#maximale Länge eines Tweets
+maxlen <- max(str_count(train_hate$tweet_clean, "\\w+")) + 1
 
 
+# prepare data for predictors x
+data_train_x <- texts_to_sequences(tokens, data_train$tweet_clean) %>%
+  pad_sequences(maxlen = maxlen) 
+data_val_x <- texts_to_sequences(tokens, data_val$tweet_clean) %>%
+  pad_sequences(maxlen = maxlen) 
+data_test_x <- texts_to_sequences(tokens, test_hate$tweet_clean) %>%
+  pad_sequences(maxlen = maxlen)
 
+# Konvertieren der Klassenlabels in numerische Form
+data_train <- data_train %>% 
+  mutate(class = as.numeric(factor(class)))
+
+data_val <- data_val %>% 
+  mutate(class = as.numeric(factor(class)))
+
+# prepare data for target y
+data_train_y <- to_categorical(data_train$class - 1, num_classes = 2)
+data_val_y <- to_categorical(data_val$class - 1, num_classes = 2)
+
+#für Reproduzierbarkeit Zufallszahlengenerierung in R zu konfigurieren
+RNGkind(sample.kind = "Rounding")
+
+initializer <- initializer_random_normal(seed = 100)
+
+## Model erstellen
+model_keras <- keras_model_sequential()
+
+# layer lstm 1 settings
+unit_lstm1 <- 256 #Neuronen
+dropout_lstm1 <- 0.5 #Dropout um Overfittig zu reduzieren
+recurrent_dropout_lstm1 <- 0.5
+
+# layer lstm 2 settings
+unit_lstm2 <- 32
+dropout_lstm2 <- 0.5
+recurrent_dropout_lstm2 <- 0.5
+
+model_keras %>%
+  layer_embedding(
+    name = "input",
+    input_dim = num_words_train,
+    input_length = maxlen,
+    output_dim = maxlen
+  ) %>%
+  layer_dropout(
+    name = "embedding_dropout",
+    rate = 0.6
+  ) %>%
+   # lstm1
+  layer_lstm(
+    name = "lstm1",
+    units = unit_lstm1,
+    dropout = dropout_lstm1,
+    recurrent_dropout = recurrent_dropout_lstm1,
+    return_sequences = TRUE
+  ) %>%
+  # lstm2
+  layer_lstm(
+    name = "lstm2",
+    units = unit_lstm2,
+    dropout = dropout_lstm2,
+    recurrent_dropout = recurrent_dropout_lstm2,
+    return_sequences = FALSE
+  ) %>%
+  # output layer
+  layer_dense(
+    name = "output",
+    units = 2,
+    activation = "sigmoid"
+  )
+
+# Compile Model
+model_keras %>% 
+  compile(optimizer = optimizer_adam(learning_rate = 0.01),
+          metrics = "accuracy",
+          loss = "binary_crossentropy")
+
+# model summary
+summary(model_keras)
+
+
+```
+
+### 4.2 Model trainieren
+
+```{r}
+epochs <- 10 #Durchläufe
+batch_size <- 1024
+
+# fit the model
+tic()
+history <- model_keras %>%
+  fit(
+    data_train_x,
+    data_train_y,
+    batch_size = batch_size,
+    epochs = epochs,
+    verbose = 1,
+    validation_data = list(data_val_x, data_val_y))
+
+# history plot
+plot(history)
+toc()
+```
+
+### 4.3 Modell Evaluation
+
+Die Anwendung des Models auf die Datensätze train, validation und test ergibt nachstehende Metriken.
+
+::: panel-tabset
+## train-Datensatz
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+# vorhersagen auf train-Datensatz
+data_train_pred <- model_keras %>%
+  predict(data_train_x) %>%
+  k_argmax() %>%
+  as.vector()
+
+#Metriken train-Datensatz
+conf.matrix <-  confusionMatrix(
+  factor(data_train_pred, labels = c("no", "yes")),
+  factor(data_train$class, labels = c("no", "yes")),
+  positive = "yes"
+)
+
+#Anzeigen
+conf.matrix$byClass %>% round(digits = 3) * 100
+```
+
+## Validation-Datensatz
+
+```{r }
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+# vorhersagen auf data_val (= Datensatz für Kreuzvalidierung)
+data_val_pred <- model_keras %>%
+  predict(data_val_x) %>%
+  k_argmax() %>%
+  as.vector()
+
+#Metriken für Teil von train-Datensatz (data_val)
+conf.matrix <-  confusionMatrix(
+  factor(data_val_pred, labels = c("no", "yes")),
+  factor(data_val$class, labels = c("no", "yes")),
+  positive = "yes"
+)
+
+#Anzeigen
+conf.matrix$byClass %>% round(digits = 3) * 100
+```
+
+## test-Datensatz
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+# vorhersagen auf test-Datensatz
+data_test_pred <- model_keras %>%
+  predict(data_test_x) %>%
+  k_argmax() %>%
+  as.vector()
+
+#Metriken test-Datensatz
+conf.matrix <-  confusionMatrix(
+  factor(data_test_pred, labels = c("no", "yes")),
+  factor(test_hate$class, labels = c("no", "yes")),
+  positive = "yes"
+)
+
+#Anzeigen
+conf.matrix$byClass %>% round(digits = 3) * 100
+```
+:::
+
+## 5 Modell mit Tidymodels
+
+Nun werden Modelle mit Tidymodels erstellt. Verwendet werden hierfür Random Forest, Nearest Neighbor und XGBoost.
+
+```{r Modelle}
+mod_rand <- rand_forest(mode = "classification")
+mod_neighbor <- nearest_neighbor(mode = "classification")
+mod_xgb <- boost_tree(mode = "classification")
+
+#Mit Tuning
+mod_randT <-
+  rand_forest(mtry = tune(),
+              min_n = tune(),
+              trees = 1000, #guter Wert (keine Veränderungen durch tunen)
+              mode = "classification") %>% 
+  set_engine("ranger", num.threads = 4)
+
+mod_neighborT <- 
+  nearest_neighbor(neighbors = tune(),
+                   mode = "classification")
+
+mod_xgbT <- 
+   boost_tree(min_n = tune(), 
+              trees = 1000,
+              learn_rate = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("xgboost", nthreads = parallel::detectCores()-1)
+```
+
+```{r}
+#Daten (ohne Tokens) und Lexikon laden
+train_mod <- train_hate %>% 
+  select(-tweet)
+test_mod <- test_hate %>% 
+  select(-tweet)
+
+Insults <- read_excel(insult_pfad)
+names(Insults) <- "word" #get_sentiment braucht Bezeichnung word
+Insults$value <- 1
+
+#recipe
+rec <- recipe(class ~ ., data = train_mod) %>%  
+  update_role(id, new_role = "id") %>% 
+  update_role(tweet_clean, new_role = "ignore") %>% #Spalte wird kein Prädiktor
+  step_mutate(insult = get_sentiment(tweet_clean,  
+                                    method = "custom",
+                                    lexicon = Insults)) %>% 
+  step_textfeature(tweet_clean, keep_original_cols = TRUE) %>% 
+  step_nzv(all_predictors()) %>% #da textfeature viele sinnlose Spalten erzeugt
+  step_tokenize(tweet_clean) %>%
+  step_stopwords(tweet_clean, keep = FALSE) %>%
+  step_tokenfilter(tweet_clean, max_tokens = 1e3) %>% 
+  step_tfidf(tweet_clean, keep_original_cols = TRUE) %>% 
+  step_nzv(all_predictors()) %>%  #zweimal, um sofort Spalten zu entfernen
+  step_normalize(all_numeric_predictors())
+
+
+rec_prepped <- prep(rec)
+data_prep <- bake(rec_prepped, new_data = NULL)
+# Erkenntisse bake: tfidf wird durch step_nzv komplett entfernt
+
+
+#Kreuzvalidierung
+set.seed(42)
+kv <- vfold_cv(train_mod, strata = class)
+```
+
+Mit diesem Rezept kommt man zu folgenden Ergebnissen.
+
+### 5.1 Ohne Tuning
+
+::: panel-tabset
+## Random Forest
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_rand <-
+  workflow() %>% 
+  add_model(mod_rand) %>% 
+  add_recipe(rec)
+
+tic()
+fit_rand <-
+  fit(wf_rand,
+      data = train_mod)
+toc()
+
+#Vorhersage
+tic()
+preds <-
+  predict(fit_rand, new_data = test_mod)
+toc()
+
+#Test
+Vorgersage <-
+  test_mod %>%  
+  bind_cols(preds)
+
+my_metrics <- metric_set(accuracy, f_meas)
+my_metrics(Vorgersage,
+           truth = as.factor(class), #estimate ist factor, also class umwandeln
+           estimate = .pred_class)
+```
+
+## Nearest Neighbor
+
+```{r }
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_n <-
+  workflow() %>% 
+  add_model(mod_neighbor) %>% 
+  add_recipe(rec)
+
+tic()
+fit_n <-
+  fit(wf_n,
+      data = train_mod)
+toc()
+
+#Vorhersage
+tic()
+preds <-
+  predict(fit_n, new_data = test_mod)
+toc()
+
+#Test
+Vorgersage <-
+  test_mod %>%  
+  bind_cols(preds)
+
+my_metrics <- metric_set(accuracy, f_meas)
+my_metrics(Vorgersage,
+           truth = as.factor(class), #estimate ist factor, also class umwandeln
+           estimate = .pred_class)
+```
+
+## XGBoost
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_boost <-
+  workflow() %>% 
+  add_model(mod_xgb) %>% 
+  add_recipe(rec)
+
+tic()
+fit_boost <-
+  fit(wf_boost,
+      data = train_mod)
+toc()
+
+#Vorhersage
+tic()
+preds <-
+  predict(fit_boost, new_data = test_mod)
+toc()
+
+#Test
+Vorgersage <-
+  test_mod %>%  
+  bind_cols(preds)
+
+my_metrics <- metric_set(accuracy, f_meas)
+my_metrics(Vorgersage,
+           truth = as.factor(class), #estimate ist factor, also class umwandeln
+           estimate = .pred_class)
+```
+:::
+
+Ohne Tuning erhält man bereits einen guten Accuracy-Wert. Und ein Rechenzeit von unter 10 Sekunden ist natürlich sehr angenehm.
+
+Mal sehen, ob sich das Modell durch tuning verbessert.
+
+### 5.2 Mit Tuning
+
+::: panel-tabset
+## Random Forest
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_randT <-
+  workflow() %>% 
+  add_model(mod_randT) %>% 
+  add_recipe(rec)
+
+tic()
+set.seed(42)
+rf_tune <- tune_grid(object = wf_randT, resamples = kv, grid = 5,
+                         control = control_grid(save_workflow = TRUE))
+toc()
+
+#Ergebnisse
+best_model_rf <- fit_best(rf_tune)
+
+rf_aufTest <- last_fit(best_model_rf, train_test_split)
+rf_aufTest %>% collect_metrics()
+
+```
+
+## Nearest Neighbor
+
+```{r }
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_knnT <-
+  workflow() %>% 
+  add_model(mod_neighborT) %>% 
+  add_recipe(rec)
+
+tic()
+set.seed(42)
+knn_tune <- tune_grid(object = wf_knnT, resamples = kv, grid = 5,
+                         control = control_grid(save_workflow = TRUE))
+toc()
+
+#Ergebnisse
+best_model_knn <- fit_best(knn_tune)
+
+knn_aufTest <- last_fit(best_model_knn, train_test_split)
+knn_aufTest %>% collect_metrics()
+```
+
+## XGBoost
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
+wf_xgbT <-
+  workflow() %>% 
+  add_model(mod_xgbT) %>% 
+  add_recipe(rec)
+
+tic()
+set.seed(42)
+xgb_tune <- tune_grid(object = wf_xgbT, resamples = kv, grid = 5,
+                         control = control_grid(save_workflow = TRUE))
+toc()
+
+#Ergebnisse
+best_model_xgb <- fit_best(xgb_tune)
+
+xgb_aufTest <- last_fit(best_model_xgb, train_test_split)
+xgb_aufTest %>% collect_metrics()
+```
+:::
+
+Wenn man die Accuracy zwischen den getuneten und den nicht getuneten Modellen vergleicht sind diese kaum besser oder gleich gut. Folglich kann man sich den erhöhten Zeitaufwand, der durch das Tuning entsteht, sparen.
+
+## 6 Fazit
+
+Es konnte gezeigt werden, dass man Hate Speech gut durch Machine LEarning Alghorithmen

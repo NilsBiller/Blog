@@ -2,7 +2,7 @@ project:
   type: website
 
 website:
-  title: "blognilsbiller"
+  title: "blognils"
   navbar:
     right:
       - about.qmd
@@ -11,9 +11,9 @@ website:
         
 format:
   html:
-    theme: solar
     toc: true
     df-print: paged
+    theme: darkly
     css: styles.css
 
 editor: visual

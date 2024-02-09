@@ -113,6 +113,9 @@ df_hate <- df_hate %>%
 ```
 
 ```{r message=FALSE, warning=FALSE}
+#| code-fold: true
+#| code-summary: "Show the Code"
+
 ## die 15 häufigsten Wörter
 df_hate %>%
   count(words, sort = TRUE) %>%
@@ -249,7 +252,7 @@ Homonyme wie dieses, könnten zu Fehlern in der Vorhersage führen.
 
 Die am häufigsten vorkommenden Wortpaare sind in folgender interaktiven Graphik zu sehen.
 
-*Navigation:* rechte Maustaste: bewegen; Mausrad: zoomen
+*Navigation:* linke Maustaste: bewegen; Mausrad: zoomen
 
 ```{r message=FALSE, warning=FALSE}
 #| code-fold: true
@@ -377,7 +380,7 @@ Die Metrics dieses vortrainierten Modells sind ziemlich gut. Diese Werte können
 
 ## 4 Rekurrentes Neuronales Netzwerk
 
-Das LSTM (Long Short-Term Memory) Modell ist eine spezielle Form von Rekurrenten Neuronalen Netzwerken (RNNs), die besonders gut für die Verarbeitung von Sequenzdaten wie Texten geeignet ist.
+Das LSTM (Long Short-Term Memory) Modell ist eine spezielle Form der Rekurrenten Neuronalen Netzwerke (RNNs), die besonders gut für die Verarbeitung von Sequenzdaten wie Texten geeignet sind.
 
 ### 4.1 LSTM Modell erstellen
 
@@ -841,7 +844,7 @@ xgb_aufTest %>% collect_metrics()
 ```
 :::
 
-Wenn man die Accuracy zwischen den optimierten und den nicht optimierten Modellen vergleicht, sind diese kaum besser oder gleich gut. Folglich kann man sich in diesem Fall den erhöhten Zeitaufwand, der durch das Tuning entsteht, sparen.
+Wenn man die Accuracy zwischen den optimierten und den nicht optimierten Modellen vergleicht, ist diese kaum besser oder gleich gut. Folglich kann man sich in diesem Fall den erhöhten Zeitaufwand, der durch das Tuning entsteht, sparen.
 
 ## 6 Fazit
 
